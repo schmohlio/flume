@@ -41,4 +41,10 @@ public class KafkaChannelConfiguration {
 
   public static final String READ_SMALLEST_OFFSET = "readSmallestOffset";
   public static final boolean DEFAULT_READ_SMALLEST_OFFSET = false;
+
+  public static final String INCLUDE_METADATA_IN_BODY = "includeMetadataInBody";
+  public static final boolean DEFAULT_INCLUDE_METADATA_IN_BODY = false;
+  public static final String METADATA_DELIMITER = "metadataDelimiter";
+  public static final String DEFAULT_METADATA_DELIMITER = "\t";
+
 }

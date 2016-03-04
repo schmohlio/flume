@@ -20,11 +20,15 @@ package org.apache.flume.channel.kafka;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
+import com.google.common.base.Charsets;
+import com.google.common.io.ByteStreams;
+import com.google.common.io.ByteArrayDataOutput;
 import kafka.consumer.*;
 import kafka.javaapi.consumer.ConsumerConnector;
 import kafka.javaapi.producer.Producer;
 import kafka.producer.KeyedMessage;
 import kafka.producer.ProducerConfig;
+import kafka.message.MessageAndMetadata;
 import org.apache.avro.io.*;
 import org.apache.avro.specific.SpecificDatumReader;
 import org.apache.avro.specific.SpecificDatumWriter;
@@ -43,6 +47,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.nio.ByteBuffer;
+import java.nio.charset.Charset;
 import java.util.*;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -58,6 +63,11 @@ public class KafkaChannel extends BasicChannelSemantics {
 
   private AtomicReference<String> topic = new AtomicReference<String>();
   private boolean parseAsFlumeEvent = DEFAULT_PARSE_AS_FLUME_EVENT;
+
+  private boolean includeMetadataInBody = DEFAULT_INCLUDE_METADATA_IN_BODY;
+  private String metadataDelimiter = DEFAULT_METADATA_DELIMITER;
+  private static final Charset TEXT_ENCODING = Charsets.UTF_8;
+
   private final Map<String, Integer> topicCountMap =
     Collections.synchronizedMap(new HashMap<String, Integer>());
 
@@ -199,6 +209,11 @@ public class KafkaChannel extends BasicChannelSemantics {
       kafkaConf.put("auto.offset.reset", "smallest");
     }
 
+    includeMetadataInBody =
+            ctx.getBoolean(INCLUDE_METADATA_IN_BODY, DEFAULT_INCLUDE_METADATA_IN_BODY);
+    metadataDelimiter =
+            ctx.getString(METADATA_DELIMITER, DEFAULT_METADATA_DELIMITER);
+
     if (counter == null) {
       counter = new KafkaChannelCounter(getName());
     }
@@ -318,8 +333,30 @@ public class KafkaChannel extends BasicChannelSemantics {
             e = EventBuilder.withBody(event.getBody().array(),
               toStringMap(event.getHeaders()));
           } else {
-            e = EventBuilder.withBody(it.next().message(),
-              Collections.EMPTY_MAP);
+            MessageAndMetadata<byte[],byte[]> messageAndMetadata = it.next();
+            byte[] message = messageAndMetadata.message();
+            if (includeMetadataInBody) {
+              KafkaMetadataBody kafkaMetadataBody = new KafkaMetadataBody(
+                messageAndMetadata.key(),
+                messageAndMetadata.offset(),
+                messageAndMetadata.partition(),
+                messageAndMetadata.topic()
+              );
+              byte[] delim = metadataDelimiter.getBytes(TEXT_ENCODING);
+              byte[] metadata = kafkaMetadataBody.serializeToDelimitedLine(delim);
+              int bufferSize = metadata.length + delim.length + message.length;
+              ByteArrayDataOutput outputStream =
+                  ByteStreams.newDataOutput(bufferSize);
+              outputStream.write(message); // write payload
+              outputStream.write(delim);
+              outputStream.write(metadata); // write metadata
+              byte[] messageWithMetadata = outputStream.toByteArray();
+              e = EventBuilder.withBody(messageWithMetadata,
+                      Collections.EMPTY_MAP);
+            } else {
+              e = EventBuilder.withBody(message,
+                      Collections.EMPTY_MAP);
+            }
           }
 
         } catch (ConsumerTimeoutException ex) {
@@ -403,6 +440,38 @@ public class KafkaChannel extends BasicChannelSemantics {
       this.consumer = consumerConnector;
       this.iterator = iterator;
       this.uuid = uuid;
+    }
+  }
+
+  //private class JsonKafkaMetadata<T> {
+  //  final T key;
+  private class KafkaMetadataBody {
+    final byte[] key;
+    final Long offset;
+    final int partition;
+    final String topic;
+
+    KafkaMetadataBody(byte[] key, Long offset, int partition,
+      String topic) {
+
+      this.key = key;
+      this.offset = offset;
+      this.partition = partition;
+      this.topic = topic;
+    }
+
+    byte[] serializeToDelimitedLine (byte[] delim) {
+      ByteArrayDataOutput outputStream = ByteStreams.newDataOutput();
+
+      outputStream.write(key);
+      outputStream.write(delim);
+      outputStream.writeLong(offset);
+      outputStream.write(delim);
+      outputStream.writeInt(partition);
+      outputStream.write(delim);
+      outputStream.write(topic.getBytes(TEXT_ENCODING));
+
+      return outputStream.toByteArray();
     }
   }
 
