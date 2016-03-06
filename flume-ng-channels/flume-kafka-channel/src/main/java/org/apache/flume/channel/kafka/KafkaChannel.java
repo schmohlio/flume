@@ -460,14 +460,20 @@ public class KafkaChannel extends BasicChannelSemantics {
       this.topic = topic;
     }
 
+    // for Text serialization.
     byte[] serializeToDelimitedLine (byte[] delim) {
       ByteArrayDataOutput outputStream = ByteStreams.newDataOutput();
 
+      // consider adding these fields to header and
+      // using LongWritable to serialize in sequence file.
+      String offset = Long.toString(this.offset);
+      String partition = Integer.toString(this.partition);
+
       outputStream.write(key);
       outputStream.write(delim);
-      outputStream.writeLong(offset);
+      outputStream.write(offset.getBytes(TEXT_ENCODING));
       outputStream.write(delim);
-      outputStream.writeInt(partition);
+      outputStream.write(partition.getBytes(TEXT_ENCODING));
       outputStream.write(delim);
       outputStream.write(topic.getBytes(TEXT_ENCODING));
 
